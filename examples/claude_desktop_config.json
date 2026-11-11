@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "dcc-pipeline": {
+      "command": "dcc-pipeline-mcp"
+    },
+    "zbrush": {
+      "command": "zbrush-mcp"
+    },
+    "substance-painter": {
+      "command": "substance-painter-mcp"
+    },
+    "maya": {
+      "command": "maya-mcp"
+    },
+    "3dsmax": {
+      "command": "3dsmax-mcp"
+    },
+    "blender": {
+      "command": "blender-mcp"
+    },
+    "autocad": {
+      "command": "autocad-mcp"
+    }
+  }
+}
