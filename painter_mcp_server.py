@@ -1,24 +1,49 @@
 """
-Adobe Substance 3D Painter MCP Server + Direct CLI Client
-Connects to the Substance 3D Painter Live Bridge on 127.0.0.1:8768.
-Automatically launches Adobe Substance 3D Painter if it is not running.
+Adobe Substance 3D Painter MCP Server + Automated PBR Pipeline + Direct CLI Client
+Connects MCP clients to the Substance 3D Painter Live Bridge (default 127.0.0.1:8768) on Windows and macOS.
 """
 
 import argparse
 import json
 import os
+import platform
 import socket
 import subprocess
-import sys
 import time
 from typing import Any, Dict, List, Optional
 from mcp.server.fastmcp import FastMCP
 
-PAINTER_HOST = "127.0.0.1"
-PAINTER_PORT = 8768
-PAINTER_EXE = r"C:\Program Files\Adobe\Adobe Substance 3D Painter\Adobe Substance 3D Painter.exe"
+PAINTER_HOST = os.environ.get("PAINTER_MCP_HOST", "127.0.0.1")
+PAINTER_PORT = int(os.environ.get("PAINTER_MCP_PORT", "8768"))
 
 mcp = FastMCP("substance-painter-mcp")
+
+
+def discover_painter_executable() -> str:
+    """Auto-discover Adobe Substance 3D Painter across Windows (Adobe CC & Steam) and macOS."""
+    env_exe = os.environ.get("PAINTER_EXE", "").strip()
+    if env_exe and os.path.exists(env_exe):
+        return env_exe
+
+    system = platform.system()
+    candidates: List[str] = []
+    if system == "Windows":
+        prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        prog_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        candidates.extend(
+            [
+                os.path.join(prog_files, "Adobe", "Adobe Substance 3D Painter", "Adobe Substance 3D Painter.exe"),
+                os.path.join(prog_x86, "Steam", "steamapps", "common", "Substance 3D Painter 2025", "Adobe Substance 3D Painter.exe"),
+                os.path.join(prog_x86, "Steam", "steamapps", "common", "Substance 3D Painter 2024", "Adobe Substance 3D Painter.exe"),
+            ]
+        )
+    elif system == "Darwin":
+        candidates.append("/Applications/Adobe Substance 3D Painter/Adobe Substance 3D Painter.app/Contents/MacOS/Adobe Substance 3D Painter")
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return env_exe or r"C:\Program Files\Adobe\Adobe Substance 3D Painter\Adobe Substance 3D Painter.exe"
 
 
 def is_painter_bridge_alive(timeout: float = 2.0) -> bool:
@@ -32,34 +57,40 @@ def is_painter_bridge_alive(timeout: float = 2.0) -> bool:
 
 
 def ensure_painter_running(wait_seconds: int = 75) -> Dict[str, Any]:
-    """Ensure Adobe Substance 3D Painter is running and its TCP bridge (port 8768) is active. Launches it if closed."""
+    """Ensure Adobe Substance 3D Painter is running and its TCP bridge is active."""
     if is_painter_bridge_alive():
-        return {"status": "ok", "message": "Substance 3D Painter is already running and connected on port 8768."}
+        return {"status": "ok", "message": f"Substance 3D Painter is already running on {PAINTER_HOST}:{PAINTER_PORT}."}
 
-    if not os.path.exists(PAINTER_EXE):
-        return {"status": "error", "message": f"Substance 3D Painter executable not found at {PAINTER_EXE}"}
+    painter_exe = discover_painter_executable()
+    if not os.path.exists(painter_exe):
+        return {
+            "status": "error",
+            "message": f"Substance 3D Painter executable not found at '{painter_exe}'. Set PAINTER_EXE environment variable.",
+        }
 
-    try:
-        proc_check = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq Adobe Substance 3D Painter.exe", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        already_starting = "substance" in proc_check.stdout.lower()
-    except Exception:
-        already_starting = False
+    already_starting = False
+    if platform.system() == "Windows":
+        try:
+            proc_check = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq Adobe Substance 3D Painter.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            already_starting = "substance" in proc_check.stdout.lower()
+        except Exception:
+            already_starting = False
 
     if not already_starting:
-        try:
-            subprocess.run(["schtasks", "/run", "/tn", "LaunchSubstancePainter"], capture_output=True, text=True, timeout=10)
-        except Exception:
+        task_name = os.environ.get("PAINTER_LAUNCH_TASK", "").strip()
+        if task_name and platform.system() == "Windows":
+            subprocess.run(["schtasks", "/run", "/tn", task_name], capture_output=True, text=True, timeout=10)
+        else:
             try:
-                launch_bat = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launch_painter.bat")
-                if os.path.exists(launch_bat):
-                    os.startfile(launch_bat)
+                if platform.system() == "Windows":
+                    os.startfile(painter_exe)  # type: ignore[attr-defined]
                 else:
-                    os.startfile(PAINTER_EXE)
+                    subprocess.Popen([painter_exe])
             except Exception as e:
                 return {"status": "error", "message": f"Failed to launch Substance 3D Painter: {e}"}
 
@@ -109,25 +140,25 @@ def send_to_painter(
     except Exception as e:
         return {
             "status": "error",
-            "message": f"Could not connect to Substance 3D Painter on {PAINTER_HOST}:{PAINTER_PORT} ({e}).",
+            "message": f"Could not connect to Substance 3D Painter on {PAINTER_HOST}:{PAINTER_PORT} ({e}). Ensure painter_bridge.py is installed in Painter's python/startup folder.",
         }
 
 
 @mcp.tool()
 def launch_painter(wait_seconds: int = 75) -> str:
-    """Launch Adobe Substance 3D Painter if it is not already running and wait until the live TCP bridge on port 8768 is ready."""
+    """Launch Adobe Substance 3D Painter if not already running and wait until the live TCP bridge is ready."""
     return json.dumps(ensure_painter_running(wait_seconds=wait_seconds), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def ping_painter(auto_launch: bool = True) -> str:
+def ping_painter(auto_launch: bool = False) -> str:
     """Check if Adobe Substance 3D Painter live bridge is connected."""
     return json.dumps(send_to_painter("ping", auto_launch=auto_launch), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def get_project_info() -> str:
-    """Get full details of the currently open Substance 3D Painter project."""
+    """Get full details (Texture Sets, resolutions, channels, stack layers) of the open Substance 3D Painter project."""
     return json.dumps(send_to_painter("get_project_info"), ensure_ascii=False, indent=2)
 
 
@@ -136,10 +167,10 @@ def open_or_create_project(
     project_path: str = "",
     mesh_path: str = "",
     resolution: int = 2048,
-    normal_map_format: str = "OpenGL",
+    normal_map_format: str = "DirectX",
     close_existing: bool = True,
 ) -> str:
-    """Open an existing .spp project file OR create a new Substance 3D Painter project from a 3D mesh file (.fbx, .obj, .usd, .gltf)."""
+    """Open an existing .spp project OR create a new Painter project from a 3D mesh (.fbx, .obj, .usd, .gltf). Use DirectX for Unreal Engine, OpenGL for Unity/Blender."""
     return json.dumps(
         send_to_painter(
             "open_or_create_project",
@@ -164,7 +195,7 @@ def save_project(file_path: str = "") -> str:
 
 @mcp.tool()
 def search_resources(query: str = "", usage: str = "", limit: int = 30) -> str:
-    """Search Substance 3D Painter shelves for resources."""
+    """Search Substance 3D Painter shelves for Smart Materials, Materials, Smart Masks, Filters, or Generators."""
     return json.dumps(
         send_to_painter("search_resources", {"query": query, "usage": usage, "limit": limit}),
         ensure_ascii=False,
@@ -183,7 +214,7 @@ def create_layer(
     metallic: Optional[float] = None,
     roughness: Optional[float] = None,
 ) -> str:
-    """Create a layer in the active or specified Texture Set."""
+    """Create a fill, paint, or smart_material layer in the active or specified Texture Set."""
     return json.dumps(
         send_to_painter(
             "create_layer",
@@ -213,7 +244,7 @@ def add_layer_mask_or_effect(
     resource_url: str = "",
     stack_type: str = "mask",
 ) -> str:
-    """Add a mask or effect to a layer."""
+    """Add a black/white mask, smart mask, generator (e.g. Curvature/Dirt), or filter to a layer."""
     return json.dumps(
         send_to_painter(
             "add_layer_mask_or_effect",
@@ -241,7 +272,7 @@ def export_textures(
     bit_depth: str = "8",
     resolution: Optional[int] = None,
 ) -> str:
-    """Export project textures to disk using a Substance 3D Painter export preset."""
+    """Export project textures using a preset (e.g. 'Unreal Engine 4 (Packed)', 'Unity HD Render Pipeline (Metallic Standard)', 'PBR Metallic Roughness')."""
     return json.dumps(
         send_to_painter(
             "export_textures",
@@ -264,23 +295,53 @@ def auto_texture_and_export_pbr(
     mesh_path: str,
     export_dir: str,
     smart_material_query: str = "Steel",
+    target_engine: str = "unreal",
+    high_poly_mesh_path: str = "",
     resolution: int = 2048,
     save_spp_path: str = "",
 ) -> str:
-    """End-to-end automated Substance 3D Painter pipeline."""
+    """End-to-end automated Painter pipeline: create project, optionally bake High-to-Low mesh maps, apply Smart Material, and export engine-packed PBR maps."""
+    engine_key = target_engine.lower().strip()
+    if engine_key in ("unreal", "ue5", "ue4"):
+        normal_fmt = "DirectX"
+        export_preset = "Unreal Engine 4 (Packed)"
+    elif engine_key in ("unity", "urp", "hdrp"):
+        normal_fmt = "OpenGL"
+        export_preset = "Unity HD Render Pipeline (Metallic Standard)"
+    else:
+        normal_fmt = "OpenGL"
+        export_preset = "PBR Metallic Roughness"
+
     steps = []
     p1 = send_to_painter(
         "open_or_create_project",
         {
             "mesh_path": mesh_path,
             "resolution": resolution,
-            "normal_map_format": "OpenGL",
+            "normal_map_format": normal_fmt,
             "close_existing": True,
         },
     )
     steps.append({"step": "open_or_create_project", "result": p1})
     if p1.get("status") != "ok":
         return json.dumps({"status": "error", "steps": steps}, ensure_ascii=False, indent=2)
+
+    if high_poly_mesh_path and os.path.exists(high_poly_mesh_path):
+        hp_norm = high_poly_mesh_path.replace("\\", "/")
+        bake_py = f"""
+import substance_painter.baking as baking
+import substance_painter.textureset as ts
+
+for tex_set in ts.all_texture_sets():
+    params = baking.BakingParameters.from_texture_set(tex_set)
+    common = params.common()
+    if 'HipolyMesh' in common:
+        baking.BakingParameters.set({{common['HipolyMesh']: ['file:///{hp_norm}']}})
+baking.bake_selected_textures()
+result = {{"baked_from": "{hp_norm}"}}
+"""
+        p_bake = send_to_painter("execute_python", {"code": bake_py}, timeout=240.0)
+        steps.append({"step": "bake_high_to_low_maps", "result": p_bake})
 
     p2 = send_to_painter(
         "create_layer",
@@ -313,14 +374,14 @@ def auto_texture_and_export_pbr(
         "export_textures",
         {
             "export_path": os.path.abspath(export_dir),
-            "preset_name": "PBR Metallic Roughness",
+            "preset_name": export_preset,
             "file_format": "png",
             "bit_depth": "8",
             "resolution": resolution,
         },
     )
-    steps.append({"step": "export_textures", "result": p4})
-    return json.dumps({"status": "ok", "steps": steps}, ensure_ascii=False, indent=2)
+    steps.append({"step": "export_textures", "preset": export_preset, "result": p4})
+    return json.dumps({"status": "ok", "target_engine": target_engine, "steps": steps}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -331,7 +392,7 @@ def execute_js_in_painter(code: str) -> str:
 
 @mcp.tool()
 def execute_python_in_painter(code: str) -> str:
-    """Execute Python code directly inside Substance 3D Painter."""
+    """Execute Python code directly inside Substance 3D Painter's substance_painter.* Python API."""
     return json.dumps(send_to_painter("execute_python", {"code": code}), ensure_ascii=False, indent=2)
 
 
@@ -345,6 +406,7 @@ def main():
     parser.add_argument("--arg", type=str, default="", help="Argument or inline code for --cli")
     parser.add_argument("--mesh", type=str, default="", help="Mesh path (.fbx/.obj) for --cli auto-texture")
     parser.add_argument("--material", type=str, default="Steel", help="Smart Material query for --cli auto-texture")
+    parser.add_argument("--engine", type=str, default="unreal", help="Target engine ('unreal', 'unity', 'pbr') for --cli auto-texture")
     parser.add_argument("--file", type=str, default="", help="Path to script file for --cli js or py")
     args, _ = parser.parse_known_args()
 
@@ -352,7 +414,7 @@ def main():
         if args.cli == "launch":
             res = ensure_painter_running()
         elif args.cli == "ping":
-            res = send_to_painter("ping")
+            res = send_to_painter("ping", auto_launch=False)
         elif args.cli == "project":
             res = send_to_painter("get_project_info")
         elif args.cli == "search":
@@ -365,6 +427,7 @@ def main():
                     mesh_path=args.mesh,
                     export_dir=args.arg,
                     smart_material_query=args.material,
+                    target_engine=args.engine,
                 )
             )
             return

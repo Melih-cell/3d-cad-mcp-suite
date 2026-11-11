@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+*.log
+*.zsc
+mcp_live_cmd.txt
+mcp_live_out.txt
+*.bak
+*.tmp

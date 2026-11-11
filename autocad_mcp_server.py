@@ -1,7 +1,7 @@
 """
-AutoCAD 2027 MCP Server + Persistent COM Bridge + Direct CLI Client
-Holds a persistent STA COM connection to AutoCAD 2027 on 127.0.0.1:8766
-so both MCP tool calls and CLI calls execute in milliseconds without spawning duplicate instances.
+Autodesk AutoCAD MCP Server + Persistent STA COM Bridge + CAD-to-3D Pipeline Exporter
+Maintains a persistent STA COM connection to AutoCAD (2020–2027) on 127.0.0.1:8766
+so MCP and CLI operations execute in milliseconds without spawning duplicate instances.
 """
 
 import argparse
@@ -17,16 +17,26 @@ import traceback
 from contextlib import redirect_stdout
 from typing import Any, Dict, List, Optional
 
-import pythoncom
-import win32com.client
+try:
+    import pythoncom
+    import win32com.client
+    HAS_WIN32COM = True
+except ImportError:
+    pythoncom = None  # type: ignore[assignment]
+    win32com = None  # type: ignore[assignment]
+    HAS_WIN32COM = False
+
 from mcp.server.fastmcp import FastMCP
 
-ACAD_HOST = "127.0.0.1"
-ACAD_PORT = 8766
+ACAD_HOST = os.environ.get("ACAD_MCP_HOST", "127.0.0.1")
+ACAD_PORT = int(os.environ.get("ACAD_MCP_PORT", "8766"))
 
 PROG_IDS = [
     "AutoCAD.Application",
     "AutoCAD.Application.26",
+    "AutoCAD.Application.25",
+    "AutoCAD.Application.24",
+    "AutoCAD.Application.23",
 ]
 
 mcp = FastMCP("autocad-mcp")
@@ -64,6 +74,8 @@ def com_retry(func, retries: int = 30, delay: float = 0.4):
 
 def get_acad(auto_launch: bool = True, ensure_doc: bool = True):
     """Get or create the persistent AutoCAD COM application object in the bridge process."""
+    if not HAS_WIN32COM:
+        raise RuntimeError("pywin32 is required for live AutoCAD COM automation (Windows only).")
     global _ACAD_APP
     pythoncom.CoInitialize()
 
@@ -91,7 +103,7 @@ def get_acad(auto_launch: bool = True, ensure_doc: bool = True):
                 pass
 
     if _ACAD_APP is None:
-        raise RuntimeError("AutoCAD 2027 COM baglantisi kurulamadi.")
+        raise RuntimeError("Could not establish AutoCAD COM connection. Ensure AutoCAD (2020-2027) is installed.")
 
     try:
         com_retry(lambda: setattr(_ACAD_APP, "Visible", True), retries=5, delay=0.2)
@@ -555,6 +567,48 @@ def execute_command(command: str) -> str:
 def execute_python_in_autocad(code: str) -> str:
     """Execute Python COM automation code against the active AutoCAD session."""
     return json.dumps(send_to_autocad("execute_python", {"code": code}), ensure_ascii=False, indent=2, default=str)
+
+
+@mcp.tool()
+def export_clean_floorplan_for_3d(
+    dxf_output_path: str,
+    freeze_annotation_layers: bool = True,
+    purge_unused: bool = True,
+) -> str:
+    """Prepare the active AutoCAD architectural drawing for 3ds Max / Blender extrusion (freezes dimension/text layers, purges unused blocks, exports clean DXF)."""
+    out_norm = os.path.abspath(dxf_output_path)
+    py_code = f"""
+import os
+
+os.makedirs(os.path.dirname({repr(out_norm)}), exist_ok=True)
+frozen = []
+if {repr(freeze_annotation_layers)}:
+    for i in range(doc.Layers.Count):
+        lyr = doc.Layers.Item(i)
+        lname = str(lyr.Name).upper()
+        if any(tag in lname for tag in ("DIM", "TEXT", "ANNO", "HATCH", "TITLE", "GRID")):
+            try:
+                if str(doc.ActiveLayer.Name) != str(lyr.Name):
+                    lyr.Freeze = True
+                    frozen.append(str(lyr.Name))
+            except Exception:
+                pass
+
+if {repr(purge_unused)}:
+    try:
+        doc.PurgeAll()
+    except Exception:
+        pass
+
+# 25 = ac2013_dxf / standard ASCII DXF compatible with Blender & 3ds Max importers
+doc.SaveAs({repr(out_norm)}, 25)
+result = {{
+    "status": "ok",
+    "dxf_path": {repr(out_norm)},
+    "frozen_annotation_layers": frozen,
+}}
+"""
+    return json.dumps(send_to_autocad("execute_python", {"code": py_code}), ensure_ascii=False, indent=2, default=str)
 
 
 def main():

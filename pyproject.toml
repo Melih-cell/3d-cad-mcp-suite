@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dcc-cad-mcp-suite"
+version = "1.0.0"
+description = "Cross-DCC & CAD Model Context Protocol (MCP) server suite bridging ZBrush, Maya, 3ds Max, Substance 3D Painter, Blender, and AutoCAD with pre-flight asset validation and automated baking handoffs."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+  { name = "Melih Dokuzlar", email = "melihdokuzlar71@gmail.com" }
+]
+keywords = [
+  "mcp",
+  "model-context-protocol",
+  "claude",
+  "zbrush",
+  "maya",
+  "3ds-max",
+  "substance-painter",
+  "autocad",
+  "blender",
+  "3d-pipeline",
+  "gamedev"
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Graphics :: 3D Modeling",
+  "Topic :: Software Development :: Libraries :: Python Modules"
+]
+dependencies = [
+  "mcp[cli]>=1.2.0",
+  "pywin32>=306; sys_platform == 'win32'"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/Melih-cell/3d-cad-mcp-suite"
+Repository = "https://github.com/Melih-cell/3d-cad-mcp-suite"
+Issues = "https://github.com/Melih-cell/3d-cad-mcp-suite/issues"
+
+[project.scripts]
+3dsmax-mcp = "max_mcp_server:main"
+maya-mcp = "maya_mcp_server:main"
+zbrush-mcp = "zbrush_mcp_server:main"
+substance-painter-mcp = "painter_mcp_server:main"
+autocad-mcp = "autocad_mcp_server:main"
+blender-mcp = "blender_mcp_server:main"
+dcc-pipeline-mcp = "pipeline_mcp_server:main"
+
+[tool.setuptools]
+py-modules = [
+  "max_mcp_server",
+  "max_bridge",
+  "maya_mcp_server",
+  "maya_bridge",
+  "zbrush_mcp_server",
+  "painter_mcp_server",
+  "painter_bridge",
+  "autocad_mcp_server",
+  "blender_mcp_server",
+  "blender_bridge",
+  "pipeline_mcp_server"
+]
